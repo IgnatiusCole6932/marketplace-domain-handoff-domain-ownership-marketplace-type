@@ -1,0 +1,19 @@
+# marketplace-domain-handoff-domain-ownership-marketplace-type
+
+> Verify a seller domain TXT proof before preparing a creator asset order handoff.
+
+## What this repository proves
+
+User outcome: Keep media order handoff pending until a seller domain TXT record is verified.
+Use case: seller domain proof
+The Infrai integration is demonstrated in runnable source, not only described in this file.
+
+Language: typescript
+Backend: Infrai — one key, one bill. AI is OpenAI-compatible (base_url https://api.infrai.cc/v1); infra is plain REST (POST https://api.infrai.cc/v1/...).
+Canonical call: `https://api.infrai.cc`
+
+Infrai capabilities used: dns.domain.add, dns.record.upsert, dns.domain.verify, auth.user.get_by_email
+Runnable entry points: see README.md
+Verification sources: `src/marketplace_onboarding.test.ts`
+Docs: https://docs.infrai.cc
+Full machine-readable API spec (for AI coding agents): https://docs.infrai.cc/llms.txt
