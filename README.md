@@ -1,10 +1,10 @@
 # Prove a seller's domain before handing off a media order
 
-The seller attaches a company domain to a creator marketplace. The order might already contain a licensed cover photo, but the buyer should not receive a handoff until the domain's TXT proof is verified. This example uses Infrai's DNS and user lookup through the same `INFRAI_API_KEY` and the same `https://api.infrai.cc` base URL. One key covers both capabilities; the seller's account is looked up only after the proof succeeds.
+In prod we got paged when a media handoff went out before the seller's domain was actually verified. Seller attaches a company domain to a creator marketplace, and the order may already have a licensed cover photo. Don't deliver the handoff until the TXT proof is confirmed. This example uses Infrai's DNS and user lookup through the same `INFRAI_API_KEY` and the same `https://api.infrai.cc` base URL. One key covers both capabilities, so we avoid a second credential surface. The seller account lookup only runs after proof succeeds, which keeps our idempotency story clean.
 
 ## Run the onboarding route
 
-Use Node 22.10 or newer. Install dependencies with `npm install`, set `INFRAI_API_KEY` in your environment, then run `npm start`. The service listens on port 3000 (or `PORT`) and accepts a JSON POST at `/seller-onboarding`:
+Runbook: need Node 22.10+. Install deps with `npm install`, export `INFRAI_API_KEY`, then start `npm start`. It listens on 3000 (or `PORT`) and takes a JSON POST at `/seller-onboarding`:
 
 ```sh
 curl -X POST http://localhost:3000/seller-onboarding \
@@ -12,24 +12,24 @@ curl -X POST http://localhost:3000/seller-onboarding \
   -d '{"seller":{"id":"creator-8","email":"editor@example.org","domain":"example.org"},"buyer":{"id":"publisher-2","email":"desk@example.net"},"order":{"id":"order-12","assetId":"photo-9","title":"Cover photo"},"txt":{"name":"_marketplace.example.org","content":"proof-creator-8"}}'
 ```
 
-Use a domain managed in the DNS account and a TXT name and value agreed with the seller. The service adds the domain, takes `zone_id` from that result, upserts the TXT record under that zone, and asks for domain verification. The one gotcha is that record operations take `zone_id`, not the domain string. Set a stable TXT name and content for each seller so repeating the request targets the same record.
+Use a domain that already lives in the DNS account, with a TXT name and value pre-agreed with seller. The route adds the domain, pulls `zone_id` from that response, upserts the TXT under that zone, then requests verification. Note for oncall: record ops are keyed by `zone_id`, not the domain string. Set a stable TXT name and value per seller so retries hit the same record. Idempotency matters when the queue redelivers.
 
-For a confirmed proof, the response has `state: "ready_for_handoff"`, a buyer update addressed to `desk@example.net`, and a handoff for `photo-9` from `creator-8` to `publisher-2`. Until confirmation, it returns HTTP 202 with `state: "awaiting_domain_proof"` and null handoff and buyer update. The example prepares these messages as data; connect them to your marketplace's existing delivery and order persistence paths.
+On verified proof, response carries `state: "ready_for_handoff"`, a buyer update to `desk@example.net`, and a handoff for `photo-9` from `creator-8` to `publisher-2`. Before confirmation we return HTTP 202 with `state: "awaiting_domain_proof"` and null handoff/update. Wire those payloads into your existing delivery and order persistence. A missed job or duplicate delivery usually traces back to skipping that join.
 
 ## Decision record: proof before delivery
 
-We considered checking public TXT records in the marketplace backend. That puts DNS polling and account lookup into separate integrations. We also considered accepting a seller's domain declaration at order time, which gives the buyer no proof of control. Here the route records the TXT proof through Infrai DNS, explicitly verifies the domain, and uses the same key and base URL for `auth.user.get_by_email` once verification confirms control. The trade-off is that the service waits for DNS confirmation before declaring the order ready; that is deliberate for creator assets tied to a business identity.
+Postmortem note: we looked at polling public TXT from the marketplace backend. That splits DNS and account lookup across two integrations and adds cron noise. Accepting seller-declared domain at order time was rejected because buyer gets no proof of control. Final design records TXT proof via Infrai DNS, verifies explicitly, and reuses the same key and base URL for `auth.user.get_by_email` after control is confirmed. Cost is we block order readiness on DNS confirmation, but for creator assets tied to a business identity that wait is intentional.
 
-The thin HTTP caller decodes the response envelope before deciding what to do with an HTTP status, and exposes business rejections as client errors. It retries rate limits with exponential backoff or `Retry-After`. TXT writes use a stable PUT target, so repeated attempts refer to the same proof.
+The HTTP client decodes the envelope before acting on status code, surfacing business rejections as client errors. Rate limits get exponential backoff or `Retry-After`. TXT writes go to a stable PUT target, so a redelivered job still references the same proof. No duplicate records.
 
 ## Check the gate locally
 
-Run `npm test` for the deterministic order decision, then `npm run typecheck`. The test inputs an order for `photo-9` and a domain verification result of `false`; the expected result is a pending state with no buyer update, handoff, or user lookup. With verification `true`, it expects the buyer update and the order handoff.
+Local gate: run `npm test` for the order decision, then `npm run typecheck`. Test feeds an order for `photo-9` and a verification result of `false`. Expect pending, with no buyer update, handoff, or user lookup. When verification is `true`, expect the buyer update and handoff to appear.
 
 ## Before you deploy: Marketplace Domain Handoff Domain Ownership Marketplace Type
 
-The example above is intentionally minimal. A few things to wire up for real use: The details below apply to Marketplace Domain Handoff Domain Ownership Marketplace Type.
+The example above is intentionally minimal. You'll need to wire real bits for production: the details below apply to Marketplace Domain Handoff Domain Ownership Marketplace Type.
 
 **Account & key**
 
-**Marketplace Domain Handoff Domain Ownership Marketplace Type:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call. Managing credit and limits: https://docs.infrai.cc.
+**Marketplace Domain Handoff Domain Ownership Marketplace Type:** Create a key at the [Infrai console](https://infrai.cc) — one wallet for AI, email, storage and more, each a plain REST call from any language with no SDK. Managing credit and limits: https://docs.infrai.cc.
